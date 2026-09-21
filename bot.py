@@ -1,5 +1,6 @@
 import os
 import asyncio
+import signal
 import logging
 import httpx
 from datetime import date, timedelta
@@ -207,13 +208,26 @@ async def set_free(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def main():
     app = Application.builder().token(BOT_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CommandHandler("free", set_free))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(handle_callback))
-    logger.info("Бот запущено...")
-    await app.run_polling()
+
+    stop_event = asyncio.Event()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop_event.set)
+
+    async with app:
+        await app.start()
+        await app.updater.start_polling()
+        logger.info("Бот запущено...")
+        await stop_event.wait()
+        await app.updater.stop()
+        await app.stop()
 
 
 if __name__ == '__main__':
