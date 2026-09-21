@@ -1,21 +1,26 @@
 import os
 import logging
+import httpx
 from datetime import date, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, filters, ContextTypes
 )
-from supabase import create_client, Client
 
 # === КОНФІГУРАЦІЯ ===
 BOT_TOKEN    = os.environ.get('BOT_TOKEN')
 SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
-ADMIN_ID     = int(os.environ.get('ADMIN_CHAT_ID'))   # твій Telegram ID
+ADMIN_ID     = int(os.environ.get('ADMIN_CHAT_ID'))
 APP_URL      = os.environ.get('APP_URL', 'https://doroslist-kayf.netlify.app')
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+HEADERS = {
+    'apikey': SUPABASE_KEY,
+    'Authorization': f'Bearer {SUPABASE_KEY}',
+    'Content-Type': 'application/json',
+    'Prefer': 'return=representation'
+}
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -24,25 +29,50 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ─── /start ────────────────────────────────────────────────────────────────
+# === SUPABASE ФУНКЦІЇ ===
+def db_get(telegram_id):
+    url = f"{SUPABASE_URL}/rest/v1/participants?telegram_id=eq.{telegram_id}"
+    with httpx.Client() as client:
+        r = client.get(url, headers=HEADERS)
+        data = r.json()
+        return data[0] if data else None
+
+def db_insert(data):
+    url = f"{SUPABASE_URL}/rest/v1/participants"
+    with httpx.Client() as client:
+        r = client.post(url, headers=HEADERS, json=data)
+        return r.json()
+
+def db_update(telegram_id, data):
+    url = f"{SUPABASE_URL}/rest/v1/participants?telegram_id=eq.{telegram_id}"
+    with httpx.Client() as client:
+        r = client.patch(url, headers=HEADERS, json=data)
+        return r.json()
+
+def db_all():
+    url = f"{SUPABASE_URL}/rest/v1/participants?order=created_at.desc"
+    with httpx.Client() as client:
+        r = client.get(url, headers=HEADERS)
+        return r.json()
+
+
+# === КОМАНДИ ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    res  = supabase.table('participants').select('*').eq('telegram_id', user.id).execute()
+    p = db_get(user.id)
 
-    if res.data:
-        p = res.data[0]
-        if p['is_active']:
-            await update.message.reply_text(
-                f"Привіт, {user.first_name}! 🤍\n\n"
-                f"Твій доступ до програми активний.\n\n"
-                f"Відкрий свій кабінет:\n{APP_URL}?id={user.id}"
-            )
-        else:
-            await update.message.reply_text(
-                f"Привіт, {user.first_name}! 🤍\n\n"
-                "Твій доступ наразі неактивний.\n"
-                "Надішли скрін оплати — і я активую твій кабінет."
-            )
+    if p and p.get('is_active'):
+        await update.message.reply_text(
+            f"Привіт, {user.first_name}! 🤍\n\n"
+            f"Твій доступ до програми активний.\n\n"
+            f"Відкрий свій кабінет:\n{APP_URL}?id={user.id}"
+        )
+    elif p:
+        await update.message.reply_text(
+            f"Привіт, {user.first_name}! 🤍\n\n"
+            "Твій доступ наразі неактивний.\n"
+            "Надішли скрін оплати — і я активую твій кабінет."
+        )
     else:
         await update.message.reply_text(
             f"Привіт, {user.first_name}! 🤍\n\n"
@@ -51,23 +81,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# ─── Скрін оплати ──────────────────────────────────────────────────────────
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-
-    # Якщо це сама Кет — ігноруємо
     if user.id == ADMIN_ID:
         return
 
-    # Поточний статус учасника
-    res = supabase.table('participants').select('*').eq('telegram_id', user.id).execute()
-    participant = res.data[0] if res.data else None
-
-    if participant and participant['is_active']:
-        until = participant.get('active_until', 'безстроково')
+    p = db_get(user.id)
+    if p and p.get('is_active'):
+        until = p.get('active_until', 'безстроково')
         status = f"Активний до: {until}"
-    elif participant:
-        status = "Неактивний (оплата прострочена)"
+    elif p:
+        status = "Неактивний"
     else:
         status = "🆕 Новий учасник"
 
@@ -84,7 +108,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton("❌ Відхилити",  callback_data=f"reject_{user.id}"),
     ]]
 
-    # Пересилаємо фото Кет
     await context.bot.forward_message(
         chat_id=ADMIN_ID,
         from_chat_id=update.effective_chat.id,
@@ -96,41 +119,38 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
-
     await update.message.reply_text(
         "Дякую! Скрін отримано. Я перевірю оплату і активую твій доступ найближчим часом 🤍"
     )
 
 
-# ─── Кнопки Активувати / Відхилити ────────────────────────────────────────
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data  = query.data
+    data = query.data
 
-    # ── АКТИВУВАТИ ──
     if data.startswith('activate_'):
-        parts       = data.split('_', 2)
+        parts = data.split('_', 2)
         telegram_id = int(parts[1])
-        name        = parts[2] if len(parts) > 2 else 'Учасник'
+        name = parts[2] if len(parts) > 2 else 'Учасник'
         active_until = (date.today() + timedelta(days=30)).isoformat()
 
-        res = supabase.table('participants').select('id').eq('telegram_id', telegram_id).execute()
-        if res.data:
-            supabase.table('participants').update({
-                'is_active':    True,
+        p = db_get(telegram_id)
+        if p:
+            db_update(telegram_id, {
+                'is_active': True,
                 'active_until': active_until,
-                'type':         'paid'
-            }).eq('telegram_id', telegram_id).execute()
+                'type': 'paid'
+            })
         else:
-            supabase.table('participants').insert({
-                'telegram_id':   telegram_id,
+            db_insert({
+                'telegram_id': telegram_id,
                 'telegram_name': name,
-                'start_date':    date.today().isoformat(),
-                'type':          'paid',
-                'is_active':     True,
-                'active_until':  active_until
-            }).execute()
+                'start_date': date.today().isoformat(),
+                'type': 'paid',
+                'is_active': True,
+                'active_until': active_until
+            })
 
         await context.bot.send_message(
             chat_id=telegram_id,
@@ -146,7 +166,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ Активовано: {name} (ID: {telegram_id})\nДо: {active_until}"
         )
 
-    # ── ВІДХИЛИТИ ──
     elif data.startswith('reject_'):
         telegram_id = int(data.split('_')[1])
         await context.bot.send_message(
@@ -158,48 +177,25 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await query.edit_message_text(f"❌ Відхилено (ID: {telegram_id})")
 
-    # ── ЗРОБИТИ БЕЗКОШТОВНИМ ──
-    elif data.startswith('free_'):
-        telegram_id = int(data.split('_')[1])
-        supabase.table('participants').update({
-            'type':         'free',
-            'is_active':    True,
-            'active_until': None
-        }).eq('telegram_id', telegram_id).execute()
-        await query.edit_message_text(f"✅ Безкоштовний доступ встановлено (ID: {telegram_id})")
 
-    # ── ДЕАКТИВУВАТИ ──
-    elif data.startswith('deactivate_'):
-        telegram_id = int(data.split('_')[1])
-        supabase.table('participants').update({
-            'is_active': False
-        }).eq('telegram_id', telegram_id).execute()
-        await query.edit_message_text(f"🔒 Доступ деактивовано (ID: {telegram_id})")
-
-
-# ─── /admin — список учасників ─────────────────────────────────────────────
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
-    res = supabase.table('participants').select('*').order('created_at', desc=True).execute()
-    if not res.data:
+    participants = db_all()
+    if not participants:
         await update.message.reply_text("Учасників поки немає.")
         return
 
     text = "📋 *Учасники програми:*\n\n"
-    for p in res.data:
-        status = "✅ Активний" if p['is_active'] else "🔒 Неактивний"
-        ptype  = "Безкоштовний" if p['type'] == 'free' else f"Платний до {p.get('active_until','?')}"
-        text  += (
-            f"👤 {p['telegram_name']} | ID: `{p['telegram_id']}`\n"
-            f"   {status} | {ptype}\n\n"
-        )
+    for p in participants:
+        status = "✅" if p.get('is_active') else "🔒"
+        ptype = "Безкоштовний" if p.get('type') == 'free' else f"Платний до {p.get('active_until', '?')}"
+        text += f"{status} {p.get('telegram_name', '?')} | `{p.get('telegram_id')}` | {ptype}\n"
 
     await update.message.reply_text(text, parse_mode='Markdown')
 
 
-# ─── /free ID — дати безкоштовний доступ ───────────────────────────────────
 async def set_free(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -208,21 +204,19 @@ async def set_free(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     telegram_id = int(context.args[0])
-    res = supabase.table('participants').select('id').eq('telegram_id', telegram_id).execute()
+    p = db_get(telegram_id)
 
-    if res.data:
-        supabase.table('participants').update({
-            'type': 'free', 'is_active': True, 'active_until': None
-        }).eq('telegram_id', telegram_id).execute()
+    if p:
+        db_update(telegram_id, {'type': 'free', 'is_active': True, 'active_until': None})
     else:
-        supabase.table('participants').insert({
+        db_insert({
             'telegram_id': telegram_id,
             'telegram_name': str(telegram_id),
             'start_date': date.today().isoformat(),
             'type': 'free',
             'is_active': True,
             'active_until': None
-        }).execute()
+        })
 
     await context.bot.send_message(
         chat_id=telegram_id,
@@ -234,16 +228,13 @@ async def set_free(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ Безкоштовний доступ надано: {telegram_id}")
 
 
-# ─── Запуск ────────────────────────────────────────────────────────────────
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start",  start))
-    app.add_handler(CommandHandler("admin",  admin))
-    app.add_handler(CommandHandler("free",   set_free))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("admin", admin))
+    app.add_handler(CommandHandler("free",  set_free))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(handle_callback))
-
     logger.info("Бот запущено...")
     app.run_polling()
 
