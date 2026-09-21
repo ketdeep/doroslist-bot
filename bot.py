@@ -1,4 +1,5 @@
 import os
+import asyncio
 import logging
 import httpx
 from datetime import date, timedelta
@@ -204,7 +205,7 @@ async def set_free(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ Безкоштовний доступ: {telegram_id}")
 
 
-def main():
+async def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin))
@@ -212,8 +213,8 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(handle_callback))
     logger.info("Бот запущено...")
-    app.run_polling()
+    await app.run_polling()
 
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
