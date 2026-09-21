@@ -2,7 +2,9 @@ import os
 import asyncio
 import signal
 import logging
+import threading
 import httpx
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import date, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -15,6 +17,7 @@ SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
 ADMIN_ID     = int(os.environ.get('ADMIN_CHAT_ID'))
 APP_URL      = os.environ.get('APP_URL', 'https://doroslist-kayf.netlify.app')
+PORT         = int(os.environ.get('PORT', 8080))
 
 HEADERS = {
     'apikey': SUPABASE_KEY,
@@ -30,6 +33,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# === HTTP сервер для Render ===
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'OK')
+    def log_message(self, format, *args):
+        pass
+
+def run_http_server():
+    server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
+    server.serve_forever()
+
+
+# === Supabase функції ===
 def db_get(telegram_id):
     url = f"{SUPABASE_URL}/rest/v1/participants?telegram_id=eq.{telegram_id}"
     with httpx.Client() as client:
@@ -56,6 +74,7 @@ def db_all():
         return r.json()
 
 
+# === Команди бота ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     p = db_get(user.id)
@@ -207,8 +226,12 @@ async def set_free(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    # Запускаємо HTTP сервер в окремому потоці
+    http_thread = threading.Thread(target=run_http_server, daemon=True)
+    http_thread.start()
+    logger.info(f"HTTP сервер запущено на порту {PORT}")
 
+    app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CommandHandler("free", set_free))
@@ -216,7 +239,6 @@ async def main():
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     stop_event = asyncio.Event()
-
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop_event.set)
