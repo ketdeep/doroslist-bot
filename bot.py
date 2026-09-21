@@ -8,7 +8,6 @@ from telegram.ext import (
     CallbackQueryHandler, filters, ContextTypes
 )
 
-# === КОНФІГУРАЦІЯ ===
 BOT_TOKEN    = os.environ.get('BOT_TOKEN')
 SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
@@ -29,7 +28,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# === SUPABASE ФУНКЦІЇ ===
 def db_get(telegram_id):
     url = f"{SUPABASE_URL}/rest/v1/participants?telegram_id=eq.{telegram_id}"
     with httpx.Client() as client:
@@ -56,28 +54,26 @@ def db_all():
         return r.json()
 
 
-# === КОМАНДИ ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     p = db_get(user.id)
-
     if p and p.get('is_active'):
         await update.message.reply_text(
             f"Привіт, {user.first_name}! 🤍\n\n"
-            f"Твій доступ до програми активний.\n\n"
+            f"Твій доступ активний.\n\n"
             f"Відкрий свій кабінет:\n{APP_URL}?id={user.id}"
         )
     elif p:
         await update.message.reply_text(
             f"Привіт, {user.first_name}! 🤍\n\n"
-            "Твій доступ наразі неактивний.\n"
+            "Твій доступ неактивний.\n"
             "Надішли скрін оплати — і я активую твій кабінет."
         )
     else:
         await update.message.reply_text(
             f"Привіт, {user.first_name}! 🤍\n\n"
-            "Ласкаво просимо до програми «Дорослість в кайф».\n\n"
-            "Щоб отримати доступ — надішли скрін оплати і я активую твій особистий кабінет."
+            "Ласкаво просимо до «Дорослість в кайф».\n\n"
+            "Надішли скрін оплати і я активую твій особистий кабінет."
         )
 
 
@@ -88,8 +84,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     p = db_get(user.id)
     if p and p.get('is_active'):
-        until = p.get('active_until', 'безстроково')
-        status = f"Активний до: {until}"
+        status = f"Активний до: {p.get('active_until', 'безстроково')}"
     elif p:
         status = "Неактивний"
     else:
@@ -105,7 +100,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [[
         InlineKeyboardButton("✅ Активувати", callback_data=f"activate_{user.id}_{user.first_name}"),
-        InlineKeyboardButton("❌ Відхилити",  callback_data=f"reject_{user.id}"),
+        InlineKeyboardButton("❌ Відхилити", callback_data=f"reject_{user.id}"),
     ]]
 
     await context.bot.forward_message(
@@ -120,7 +115,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
     await update.message.reply_text(
-        "Дякую! Скрін отримано. Я перевірю оплату і активую твій доступ найближчим часом 🤍"
+        "Дякую! Скрін отримано. Активую твій доступ найближчим часом 🤍"
     )
 
 
@@ -137,11 +132,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         p = db_get(telegram_id)
         if p:
-            db_update(telegram_id, {
-                'is_active': True,
-                'active_until': active_until,
-                'type': 'paid'
-            })
+            db_update(telegram_id, {'is_active': True, 'active_until': active_until, 'type': 'paid'})
         else:
             db_insert({
                 'telegram_id': telegram_id,
@@ -155,25 +146,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(
             chat_id=telegram_id,
             text=(
-                f"🎉 Твій доступ активовано!\n\n"
+                f"🎉 Доступ активовано!\n\n"
                 f"Активний до: {active_until}\n\n"
-                f"Відкривай свій особистий кабінет:\n"
-                f"{APP_URL}?id={telegram_id}\n\n"
-                "Збережи це посилання або додай застосунок на головний екран телефону 🤍"
+                f"Відкривай кабінет:\n{APP_URL}?id={telegram_id}\n\n"
+                "Збережи посилання або додай застосунок на головний екран 🤍"
             )
         )
-        await query.edit_message_text(
-            f"✅ Активовано: {name} (ID: {telegram_id})\nДо: {active_until}"
-        )
+        await query.edit_message_text(f"✅ Активовано: {name} (ID: {telegram_id})\nДо: {active_until}")
 
     elif data.startswith('reject_'):
         telegram_id = int(data.split('_')[1])
         await context.bot.send_message(
             chat_id=telegram_id,
-            text=(
-                "На жаль, оплата не підтверджена 😔\n\n"
-                "Якщо вважаєш що це помилка — напиши мені особисто @ket_deep"
-            )
+            text="На жаль, оплата не підтверджена 😔\n\nЯкщо помилка — напиши @ket_deep"
         )
         await query.edit_message_text(f"❌ Відхилено (ID: {telegram_id})")
 
@@ -181,18 +166,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-
     participants = db_all()
     if not participants:
         await update.message.reply_text("Учасників поки немає.")
         return
-
-    text = "📋 *Учасники програми:*\n\n"
+    text = "📋 *Учасники:*\n\n"
     for p in participants:
         status = "✅" if p.get('is_active') else "🔒"
-        ptype = "Безкоштовний" if p.get('type') == 'free' else f"Платний до {p.get('active_until', '?')}"
+        ptype = "Free" if p.get('type') == 'free' else f"До {p.get('active_until', '?')}"
         text += f"{status} {p.get('telegram_name', '?')} | `{p.get('telegram_id')}` | {ptype}\n"
-
     await update.message.reply_text(text, parse_mode='Markdown')
 
 
@@ -202,10 +184,8 @@ async def set_free(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Використання: /free 123456789")
         return
-
     telegram_id = int(context.args[0])
     p = db_get(telegram_id)
-
     if p:
         db_update(telegram_id, {'type': 'free', 'is_active': True, 'active_until': None})
     else:
@@ -217,22 +197,18 @@ async def set_free(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'is_active': True,
             'active_until': None
         })
-
     await context.bot.send_message(
         chat_id=telegram_id,
-        text=(
-            "🎁 Тобі надано безкоштовний доступ до програми «Дорослість в кайф» 🤍\n\n"
-            f"Відкривай свій кабінет:\n{APP_URL}?id={telegram_id}"
-        )
+        text=f"🎁 Безкоштовний доступ надано 🤍\n\nВідкривай кабінет:\n{APP_URL}?id={telegram_id}"
     )
-    await update.message.reply_text(f"✅ Безкоштовний доступ надано: {telegram_id}")
+    await update.message.reply_text(f"✅ Безкоштовний доступ: {telegram_id}")
 
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin))
-    app.add_handler(CommandHandler("free",  set_free))
+    app.add_handler(CommandHandler("free", set_free))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(handle_callback))
     logger.info("Бот запущено...")
