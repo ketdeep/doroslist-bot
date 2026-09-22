@@ -98,41 +98,58 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    logger.info(f"Отримано фото від user_id={user.id}, ADMIN_ID={ADMIN_ID}")
+
     if user.id == ADMIN_ID:
+        logger.info("Фото від адміна — ігноруємо")
         return
 
-    p = db_get(user.id)
-    if p and p.get('is_active'):
-        status = f"Активний до: {p.get('active_until', 'безстроково')}"
-    elif p:
-        status = "Неактивний"
-    else:
-        status = "🆕 Новий учасник"
+    try:
+        p = db_get(user.id)
+        if p and p.get('is_active'):
+            status = f"Активний до: {p.get('active_until', 'безстроково')}"
+        elif p:
+            status = "Неактивний"
+        else:
+            status = "Новий учасник"
 
-    caption = (
-        f"💳 *Скрін оплати*\n\n"
-        f"👤 {user.first_name} {user.last_name or ''}\n"
-        f"🔗 @{user.username or '—'}\n"
-        f"🆔 ID: `{user.id}`\n"
-        f"📊 Статус: {status}"
-    )
+        first = user.first_name or ''
+        last = user.last_name or ''
+        username = f"@{user.username}" if user.username else 'немає'
 
-    keyboard = [[
-        InlineKeyboardButton("✅ Активувати", callback_data=f"activate_{user.id}_{user.first_name}"),
-        InlineKeyboardButton("❌ Відхилити", callback_data=f"reject_{user.id}"),
-    ]]
+        caption = (
+            f"Скрін оплати\n\n"
+            f"Ім'я: {first} {last}\n"
+            f"Username: {username}\n"
+            f"ID: {user.id}\n"
+            f"Статус: {status}"
+        )
 
-    photo = update.message.photo[-1].file_id
-    await context.bot.send_photo(
-        chat_id=ADMIN_ID,
-        photo=photo,
-        caption=caption,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
-    await update.message.reply_text(
-        "Дякую! Скрін отримано. Активую твій доступ найближчим часом 🤍"
-    )
+        keyboard = [[
+            InlineKeyboardButton("Активувати", callback_data=f"activate_{user.id}_{first}"),
+            InlineKeyboardButton("Відхилити", callback_data=f"reject_{user.id}"),
+        ]]
+
+        photo = update.message.photo[-1].file_id
+        logger.info(f"Надсилаю фото адміну {ADMIN_ID}")
+
+        await context.bot.send_photo(
+            chat_id=ADMIN_ID,
+            photo=photo,
+            caption=caption,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        logger.info("Фото надіслано адміну успішно")
+
+        await update.message.reply_text(
+            "Дякую! Скрін отримано. Активую твій доступ найближчим часом 🤍"
+        )
+
+    except Exception as e:
+        logger.error(f"Помилка в handle_photo: {e}")
+        await update.message.reply_text(
+            "Сталась помилка. Спробуй ще раз або напиши @ket_deep"
+        )
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
