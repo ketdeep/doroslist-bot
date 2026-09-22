@@ -165,25 +165,40 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         p = db_get(telegram_id)
         if p:
-            db_update(telegram_id, {'is_active': True, 'active_until': active_until, 'type': 'paid'})
+            month_count = (p.get('month_count') or 1) + 1
+            db_update(telegram_id, {
+                'is_active': True,
+                'active_until': active_until,
+                'type': 'paid',
+                'month_count': month_count
+            })
         else:
+            month_count = 1
             db_insert({
                 'telegram_id': telegram_id,
                 'telegram_name': name,
                 'start_date': date.today().isoformat(),
                 'type': 'paid',
                 'is_active': True,
-                'active_until': active_until
+                'active_until': active_until,
+                'month_count': month_count
             })
+
+        # Числівник місяця
+        month_names = {
+            1: 'першого', 2: 'другого', 3: 'третього', 4: 'четвертого',
+            5: 'п\'ятого', 6: 'шостого', 7: 'сьомого', 8: 'восьмого',
+            9: 'дев\'ятого', 10: 'десятого', 11: 'одинадцятого', 12: 'дванадцятого'
+        }
+        month_word = month_names.get(month_count, f'{month_count}-го')
 
         await context.bot.send_message(
             chat_id=telegram_id,
             text=(
-                f"🎉 Доступ активовано!\n\n"
-                f"Активний до: {active_until}\n\n"
-                f"Відкривай кабінет:\n{APP_URL}?id={telegram_id}\n\n"
-                "Збережи посилання або додай застосунок на головний екран 🤍"
-            )
+                f"Доступ до {month_word} місяця програми «Дорослість в кайф» підтверджено.\n\n"
+                f"Нові матеріали вже чекають на тебе в <a href='{APP_URL}?id={telegram_id}'>застосунку</a> 🤍"
+            ),
+            parse_mode='HTML'
         )
         await query.edit_message_text(f"✅ Активовано: {name} (ID: {telegram_id})\nДо: {active_until}")
 
