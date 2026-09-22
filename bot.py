@@ -122,14 +122,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton("❌ Відхилити", callback_data=f"reject_{user.id}"),
     ]]
 
-    await context.bot.forward_message(
+    photo = update.message.photo[-1].file_id
+    await context.bot.send_photo(
         chat_id=ADMIN_ID,
-        from_chat_id=update.effective_chat.id,
-        message_id=update.message.message_id
-    )
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=caption,
+        photo=photo,
+        caption=caption,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
